@@ -1,8 +1,9 @@
 from fastapi import APIRouter
+from pydantic import BaseModel
 from app.pipefy.client import PipefyClient
 from app.pipefy.parser import parse_card_fields
 from app.clients import FASES_SYNC, FASE_SUCESSO_ID, is_cliente
-from app.pipeline import processar_card
+from app.pipeline import salvar_card, processar_anexo
 
 router = APIRouter(prefix="/admin", tags=["admin"])
 
@@ -44,10 +45,39 @@ async def scan_fase(phase_id: str, cursor: str = None):
 
 
 @router.post("/process/{card_id}")
-async def process_sync(card_id: str):
-    """Processa um card de forma síncrona (aguarda conclusão)."""
+async def process_save_card(card_id: str):
+    """
+    Passo 1 da sincronização: salva metadados do card no banco e retorna
+    a lista de anexos para o frontend processar um por um.
+    Rápido (~2-3s) — sem chamadas de IA.
+    """
     try:
-        await processar_card(card_id)
-        return {"ok": True, "card_id": card_id}
+        attachments, card_context = await salvar_card(card_id)
+        return {
+            "ok": True,
+            "card_id": card_id,
+            "attachments": attachments,
+            "card_context": card_context,
+        }
     except Exception as e:
         return {"ok": False, "card_id": card_id, "error": str(e)}
+
+
+class AnexoPayload(BaseModel):
+    card_id: str
+    attachment: dict
+    card_context: dict
+
+
+@router.post("/process-attachment")
+async def process_single_attachment(payload: AnexoPayload):
+    """
+    Passo 2 da sincronização: processa UM anexo com Groq Vision (~10-20s).
+    O frontend chama este endpoint para cada anexo separadamente,
+    evitando o timeout de 60s do Vercel.
+    """
+    try:
+        await processar_anexo(payload.card_id, payload.attachment, payload.card_context)
+        return {"ok": True}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}

@@ -312,9 +312,9 @@
         return
       }
 
-      // ── Fase 2: Processamento ────────────────────────────────────
+      // ── Fase 2: Processamento (2 passos por card para evitar timeout) ──
       logSync(`\n▶ Processando ${allIds.length} cards com IA…`, 'fase')
-      let processados = 0, erros = 0
+      let processados = 0, erros = 0, anexosOk = 0
 
       for (const id of allIds) {
         if (syncStopped) break
@@ -323,26 +323,52 @@
         setProgresso(
           'Processando cards…',
           Math.round(processados / allIds.length * 100),
-          `${processados}/${allIds.length} processados (${erros} erros)`
+          `${processados}/${allIds.length} cards | ${anexosOk} evidências salvas (${erros} erros)`
         )
 
+        // Passo 1: salvar metadados do card (~2s, sem IA)
+        let cardData
         try {
           const r = await fetch(`/admin/process/${id}`, { method: 'POST' })
-          const d = await r.json()
-          if (d.ok) {
-            processados++
-          } else {
+          cardData = await r.json()
+          if (!cardData.ok) {
             erros++
-            logSync(`✗ Card ${id}: ${d.error || 'erro desconhecido'}`, 'erro')
+            logSync(`✗ Card ${id}: ${cardData.error || 'erro ao salvar card'}`, 'erro')
+            continue
           }
         } catch(e) {
           erros++
           logSync(`✗ Card ${id}: ${e.message}`, 'erro')
+          continue
         }
+
+        // Passo 2: processar cada anexo individualmente (~10-20s cada, com IA)
+        for (const att of (cardData.attachments || [])) {
+          if (syncStopped) break
+          while (syncPaused) await new Promise(r => setTimeout(r, 500))
+          try {
+            const r2 = await fetch('/admin/process-attachment', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                card_id: id,
+                attachment: att,
+                card_context: cardData.card_context
+              })
+            })
+            const d2 = await r2.json()
+            if (d2.ok) anexosOk++
+            else logSync(`  ✗ Anexo ${att.filename}: ${d2.error || 'erro'}`, 'erro')
+          } catch(e) {
+            logSync(`  ✗ Anexo ${att.filename}: ${e.message}`, 'erro')
+          }
+        }
+
+        processados++
       }
 
-      setProgresso('Concluído!', 100, `${processados} processados, ${erros} erros`)
-      logSync(`\n✅ Sincronização concluída: ${processados} cards processados, ${erros} erros.`, 'ok')
+      setProgresso('Concluído!', 100, `${processados} cards | ${anexosOk} evidências salvas (${erros} erros)`)
+      logSync(`\n✅ Concluído: ${processados} cards, ${anexosOk} evidências salvas, ${erros} erros.`, 'ok')
       resetBotoesSync()
     }
 

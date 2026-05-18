@@ -16,15 +16,16 @@ from app.ai.embeddings import generate_embedding, build_evidencia_text
 from app.ai.storage import upload_to_r2, compute_hash
 
 
-async def processar_card(card_id: str):
-    """Lê card do Pipefy, analisa anexos e salva no banco."""
+async def salvar_card(card_id: str) -> tuple[list, dict]:
+    """
+    Busca card no Pipefy, salva metadados no banco e retorna (attachments, card_context).
+    Não faz chamadas de IA — apenas Pipefy + DB (~2-3s).
+    """
     pipefy = PipefyClient()
     card_raw = await pipefy.get_card(card_id)
     parsed = parse_card_fields(card_raw)
     attachments = filter_valid_attachments(card_raw)
 
-    # Armazena apenas campos estruturados — exclui comments e attachments
-    # que podem conter texto arbitrário com caracteres que o asyncpg rejeita em JSONB
     data_sol = parsed.get("data_solicitacao")
     if isinstance(data_sol, str):
         try:
@@ -66,8 +67,20 @@ async def processar_card(card_id: str):
         await db.execute(stmt)
         await db.commit()
 
+    card_context = {
+        "concorrente": parsed.get("concorrente"),
+        "cliente_mysql": parsed.get("cliente_mysql"),
+        "plataforma": parsed.get("plataforma"),
+        "titulo": parsed.get("titulo"),
+    }
+    return attachments, card_context
+
+
+async def processar_card(card_id: str):
+    """Fluxo completo: salva card + processa todos os anexos. Usado pelo webhook."""
+    attachments, card_context = await salvar_card(card_id)
     for att in attachments:
-        await processar_anexo(card_id, att, parsed)
+        await processar_anexo(card_id, att, card_context)
 
 
 async def processar_anexo(card_id: str, attachment: dict, card_context: dict):
