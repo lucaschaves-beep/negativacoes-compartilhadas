@@ -5,7 +5,6 @@ from sqlalchemy.orm import selectinload
 from typing import Optional
 
 from app.database import get_db, Marca, Evidencia, Negativacao, Card, GrupoEmpresarial
-from app.ai.embeddings import generate_embedding
 
 router = APIRouter()
 
@@ -32,23 +31,27 @@ async def search(
     )
     marcas = result.scalars().all()
 
-    # 2. Busca semântica nas evidências
-    embedding = generate_embedding(q)
-    embedding_str = "[" + ",".join(str(v) for v in embedding) + "]"
-
+    # 2. Busca textual nas evidências (full-text search)
     evidencias_result = await db.execute(
         text("""
             SELECT e.id, e.card_id, e.nome_logico, e.nome_original, e.url_cache, e.url_original,
                    e.marca_identificada, e.concorrente_identificado, e.plataforma,
                    e.confirmacao_negativacao, e.data_evidencia, e.tipo_evidencia, e.confianca,
-                   1 - (e.embedding <=> :emb::vector) AS similaridade
+                   NULL::float AS similaridade
             FROM evidencias e
-            WHERE e.embedding IS NOT NULL
-              AND 1 - (e.embedding <=> :emb::vector) > 0.55
-            ORDER BY similaridade DESC
+            WHERE
+                e.nome_logico ILIKE :q
+                OR e.nome_original ILIKE :q
+                OR e.marca_identificada ILIKE :q
+                OR e.concorrente_identificado ILIKE :q
+                OR e.ocr_raw ILIKE :q
+                OR EXISTS (
+                    SELECT 1 FROM UNNEST(e.termos_identificados) AS t WHERE t ILIKE :q
+                )
+            ORDER BY e.data_evidencia DESC NULLS LAST
             LIMIT :limite
         """),
-        {"emb": embedding_str, "limite": limite},
+        {"q": f"%{q}%", "limite": limite},
     )
     evidencias = [dict(row._mapping) for row in evidencias_result]
 
