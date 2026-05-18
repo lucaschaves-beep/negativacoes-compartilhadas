@@ -1,0 +1,1 @@
+# negativacoes-compartilhadas
