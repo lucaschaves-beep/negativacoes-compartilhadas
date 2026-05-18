@@ -25,6 +25,13 @@ async def processar_card(card_id: str):
 
     # Armazena apenas campos estruturados — exclui comments e attachments
     # que podem conter texto arbitrário com caracteres que o asyncpg rejeita em JSONB
+    data_sol = parsed.get("data_solicitacao")
+    if isinstance(data_sol, str):
+        try:
+            data_sol = date.fromisoformat(data_sol)
+        except (ValueError, TypeError):
+            data_sol = None
+
     raw = parsed["raw_data"]
     raw_data_safe = {
         "id": raw.get("id"),
@@ -45,7 +52,7 @@ async def processar_card(card_id: str):
             plataforma=parsed.get("plataforma"),
             status=parsed.get("status"),
             fase_atual=parsed.get("fase_atual"),
-            data_solicitacao=parsed.get("data_solicitacao"),
+            data_solicitacao=data_sol,
             raw_data=raw_data_safe,
             processado=False,
         ).on_conflict_do_update(
