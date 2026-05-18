@@ -25,7 +25,6 @@ async def search(
             or_(
                 Marca.nome.ilike(f"%{q}%"),
                 Marca.nome_mysql.ilike(f"%{q}%"),
-                text(f"'{q.lower()}' = ANY(SELECT LOWER(a) FROM UNNEST(aliases) a)"),
             )
         )
     )

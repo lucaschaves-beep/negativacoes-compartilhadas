@@ -62,6 +62,15 @@
     async function buscar() {
       const q = document.getElementById('query').value.trim()
       if (!q) return
+
+      // Se colaram URL do Pipefy no campo de busca, processar o card
+      if (q.includes('pipefy.com')) {
+        document.getElementById('resultados').innerHTML =
+          `<p class="text-blue-600 text-sm">URL do Pipefy detectada — use a seção <strong>"Processar card do Pipefy"</strong> abaixo para analisar esse card.</p>`
+        document.getElementById('cardId').value = q
+        return
+      }
+
       document.getElementById('loading').classList.remove('hidden')
       document.getElementById('resultados').innerHTML = ''
       try {
