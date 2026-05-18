@@ -23,6 +23,17 @@ async def processar_card(card_id: str):
     parsed = parse_card_fields(card_raw)
     attachments = filter_valid_attachments(card_raw)
 
+    # Armazena apenas campos estruturados — exclui comments e attachments
+    # que podem conter texto arbitrário com caracteres que o asyncpg rejeita em JSONB
+    raw = parsed["raw_data"]
+    raw_data_safe = {
+        "id": raw.get("id"),
+        "title": raw.get("title"),
+        "current_phase": raw.get("current_phase"),
+        "createdAt": raw.get("createdAt"),
+        "fields": raw.get("fields"),
+    }
+
     async with AsyncSessionLocal() as db:
         stmt = pg_insert(Card).values(
             id=card_id,
@@ -35,12 +46,12 @@ async def processar_card(card_id: str):
             status=parsed.get("status"),
             fase_atual=parsed.get("fase_atual"),
             data_solicitacao=parsed.get("data_solicitacao"),
-            raw_data=parsed["raw_data"],
+            raw_data=raw_data_safe,
             processado=False,
         ).on_conflict_do_update(
             index_elements=["id"],
             set_={
-                "raw_data": parsed["raw_data"],
+                "raw_data": raw_data_safe,
                 "fase_atual": parsed.get("fase_atual"),
                 "updated_at": datetime.now(timezone.utc),
             },
