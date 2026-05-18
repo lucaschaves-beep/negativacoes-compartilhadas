@@ -1,9 +1,11 @@
 from fastapi import APIRouter
 from pydantic import BaseModel
+from sqlalchemy import select, delete
 from app.pipefy.client import PipefyClient
 from app.pipefy.parser import parse_card_fields
 from app.clients import FASES_SYNC, FASE_SUCESSO_ID, is_cliente
 from app.pipeline import salvar_card, processar_anexo
+from app.database import AsyncSessionLocal, Evidencia
 
 router = APIRouter(prefix="/admin", tags=["admin"])
 
@@ -61,6 +63,34 @@ async def process_save_card(card_id: str):
         }
     except Exception as e:
         return {"ok": False, "card_id": card_id, "error": str(e)}
+
+
+@router.get("/sync/failed-count")
+async def contar_falhas():
+    """Conta evidências com confianca=0.0 (análise falhou) sem deletar."""
+    async with AsyncSessionLocal() as db:
+        result = await db.execute(
+            select(Evidencia.card_id).where(Evidencia.confianca == 0.0)
+        )
+        rows = result.all()
+    card_ids = list(set(r.card_id for r in rows))
+    return {"total_evidencias": len(rows), "total_cards": len(card_ids)}
+
+
+@router.post("/sync/reset-failed")
+async def reset_falhas():
+    """Deleta evidências com confianca=0.0 e retorna card_ids para reprocessamento."""
+    async with AsyncSessionLocal() as db:
+        result = await db.execute(
+            select(Evidencia.card_id, Evidencia.id).where(Evidencia.confianca == 0.0)
+        )
+        rows = result.all()
+        ids_to_delete = [r.id for r in rows]
+        card_ids = list(set(r.card_id for r in rows))
+        if ids_to_delete:
+            await db.execute(delete(Evidencia).where(Evidencia.id.in_(ids_to_delete)))
+            await db.commit()
+    return {"deleted": len(ids_to_delete), "card_ids": card_ids}
 
 
 class AnexoPayload(BaseModel):

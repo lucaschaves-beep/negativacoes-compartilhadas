@@ -59,10 +59,14 @@
       <div class="mt-4 space-y-3">
         <p class="text-xs text-gray-500">Selecione as fases para importar. Na fase <strong>Sucesso</strong>, apenas cards onde o concorrente também é cliente Branddi (caso cliente × cliente).</p>
         <div id="fasesCheck" class="space-y-1 text-sm text-gray-700"></div>
-        <div class="flex gap-2 mt-3">
+        <div class="flex gap-2 mt-3 flex-wrap">
           <button id="btnSync" onclick="iniciarSync()"
             class="bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2 rounded-lg text-sm font-medium">
             Iniciar Sincronização
+          </button>
+          <button id="btnReprocess" onclick="reprocessarFalhas()"
+            class="bg-orange-500 hover:bg-orange-600 text-white px-4 py-2 rounded-lg text-sm font-medium">
+            Reprocessar Falhas
           </button>
           <button id="btnPause" onclick="pausarSync()" class="hidden bg-yellow-500 hover:bg-yellow-600 text-white px-4 py-2 rounded-lg text-sm font-medium">
             Pausar
@@ -384,9 +388,111 @@
 
     function resetBotoesSync() {
       document.getElementById('btnSync').classList.remove('hidden')
+      document.getElementById('btnReprocess').classList.remove('hidden')
       document.getElementById('btnPause').classList.add('hidden')
       document.getElementById('btnStop').classList.add('hidden')
       document.getElementById('btnPause').textContent = 'Pausar'
+    }
+
+    async function reprocessarFalhas() {
+      // Primeiro verifica quantas falhas existem
+      let countData
+      try {
+        const r = await fetch('/admin/sync/failed-count')
+        countData = await r.json()
+      } catch(e) {
+        alert('Erro ao verificar falhas: ' + e.message)
+        return
+      }
+
+      if (countData.total_evidencias === 0) {
+        alert('Nenhuma evidência com falha encontrada.')
+        return
+      }
+
+      const ok = confirm(
+        `Encontradas ${countData.total_evidencias} evidências com falha em ${countData.total_cards} cards.\n\n` +
+        `Deseja deletá-las e reprocessar esses ${countData.total_cards} cards?`
+      )
+      if (!ok) return
+
+      // Deleta as falhas e obtém os card_ids
+      let resetData
+      try {
+        const r = await fetch('/admin/sync/reset-failed', { method: 'POST' })
+        resetData = await r.json()
+      } catch(e) {
+        alert('Erro ao resetar falhas: ' + e.message)
+        return
+      }
+
+      const allIds = resetData.card_ids
+      if (!allIds || allIds.length === 0) {
+        alert('Nenhum card para reprocessar.')
+        return
+      }
+
+      // Inicia o reprocessamento usando o mesmo loop de sync
+      syncPaused = false
+      syncStopped = false
+      document.getElementById('syncStatus').classList.remove('hidden')
+      document.getElementById('syncLog').classList.remove('hidden')
+      document.getElementById('syncLog').innerHTML = ''
+      document.getElementById('btnSync').classList.add('hidden')
+      document.getElementById('btnReprocess').classList.add('hidden')
+      document.getElementById('btnPause').classList.remove('hidden')
+      document.getElementById('btnStop').classList.remove('hidden')
+
+      logSync(`▶ Reprocessando ${allIds.length} cards com falhas anteriores…`, 'fase')
+      let processados = 0, erros = 0, anexosOk = 0
+
+      for (const id of allIds) {
+        if (syncStopped) break
+        while (syncPaused) await new Promise(r => setTimeout(r, 500))
+
+        setProgresso(
+          'Reprocessando falhas…',
+          Math.round(processados / allIds.length * 100),
+          `${processados}/${allIds.length} cards | ${anexosOk} evidências salvas (${erros} erros)`
+        )
+
+        let cardData
+        try {
+          const r = await fetch(`/admin/process/${id}`, { method: 'POST' })
+          cardData = await r.json()
+          if (!cardData.ok) {
+            erros++
+            logSync(`✗ Card ${id}: ${cardData.error || 'erro ao salvar card'}`, 'erro')
+            continue
+          }
+        } catch(e) {
+          erros++
+          logSync(`✗ Card ${id}: ${e.message}`, 'erro')
+          continue
+        }
+
+        for (const att of (cardData.attachments || [])) {
+          if (syncStopped) break
+          while (syncPaused) await new Promise(r => setTimeout(r, 500))
+          try {
+            const r2 = await fetch('/admin/process-attachment', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ card_id: id, attachment: att, card_context: cardData.card_context })
+            })
+            const d2 = await r2.json()
+            if (d2.ok) anexosOk++
+            else logSync(`  ✗ Anexo ${att.filename}: ${d2.error || 'erro'}`, 'erro')
+          } catch(e) {
+            logSync(`  ✗ Anexo ${att.filename}: ${e.message}`, 'erro')
+          }
+        }
+        processados++
+      }
+
+      setProgresso('Concluído!', 100, `${processados} cards | ${anexosOk} evidências salvas (${erros} erros)`)
+      logSync(`\n✅ Reprocessamento concluído: ${processados} cards, ${anexosOk} evidências salvas, ${erros} erros.`, 'ok')
+      resetBotoesSync()
     }
 
     carregarFases()

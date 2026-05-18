@@ -1,3 +1,4 @@
+import asyncio
 import json
 import re
 import io
@@ -89,14 +90,19 @@ async def analyze_image(
             "temperature": 0.1,
         }
 
-        async with httpx.AsyncClient(timeout=30) as client:
-            resp = await client.post(
-                GROQ_API_URL,
-                json=payload,
-                headers={"Authorization": f"Bearer {settings.groq_api_key}"},
-            )
+        for attempt in range(3):
+            async with httpx.AsyncClient(timeout=30) as client:
+                resp = await client.post(
+                    GROQ_API_URL,
+                    json=payload,
+                    headers={"Authorization": f"Bearer {settings.groq_api_key}"},
+                )
+            if resp.status_code == 429 and attempt < 2:
+                await asyncio.sleep(20 * (attempt + 1))
+                continue
             resp.raise_for_status()
-            data = resp.json()
+            break
+        data = resp.json()
 
         raw_text = data["choices"][0]["message"]["content"].strip()
         raw_text = re.sub(r"^```(?:json)?\s*", "", raw_text)

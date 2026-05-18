@@ -2,6 +2,14 @@ from app.config import get_settings
 
 settings = get_settings()
 
+IMAGE_EXTENSIONS = {'.jpg', '.jpeg', '.png', '.gif', '.webp', '.bmp', '.tiff', '.tif'}
+
+
+def _is_image(filename: str) -> bool:
+    parts = filename.lower().rsplit('.', 1)
+    return len(parts) > 1 and f'.{parts[1]}' in IMAGE_EXTENSIONS
+
+
 FIELD_MAP = {
     "nome do concorrente": "concorrente",
     "concorrente": "concorrente",
@@ -116,7 +124,7 @@ def filter_valid_attachments(card: dict) -> list[dict]:
                 # Tenta construir URL diretamente
                 signed_url = f"https://app.pipefy.com/storage/v1/signed/{path.lstrip('/')}"
 
-            if signed_url and signed_url not in seen_urls:
+            if signed_url and signed_url not in seen_urls and _is_image(filename):
                 seen_urls.add(signed_url)
                 valid_attachments.append({
                     "url": signed_url,
@@ -131,6 +139,8 @@ def filter_valid_attachments(card: dict) -> list[dict]:
             url = att.get("url", "")
             if url and url not in seen_urls:
                 filename = url.split("/")[-1].split("?")[0]
+                if not _is_image(filename):
+                    continue
                 seen_urls.add(url)
                 valid_attachments.append({
                     "url": url,
