@@ -11,7 +11,7 @@ settings = get_settings()
 GROQ_MODEL = "meta-llama/llama-4-scout-17b-16e-instruct"
 GROQ_API_URL = "https://api.groq.com/openai/v1/chat/completions"
 
-PROMPT_ANALISE = """Você é um especialista em análise de evidências de negativação de palavras-chave em plataformas de anúncios digitais (Google Ads, Bing Ads, Microsoft Ads).
+PROMPT_ANALISE = """Você é um especialista em análise de evidências de negativação e exclusão de marcas em plataformas de anúncios digitais (Google Ads, Bing Ads).
 
 Contexto do card:
 - Cliente solicitante: {cliente}
@@ -20,23 +20,29 @@ Contexto do card:
 
 Analise a imagem e retorne APENAS um JSON com esta estrutura:
 {{
-  "marca_identificada": "nome da marca/empresa visível",
-  "concorrente_identificado": "nome do concorrente negativado, se visível",
+  "marca_identificada": "nome da marca/empresa que fez a ação",
+  "concorrente_identificado": "nome do concorrente alvo da ação",
   "dominio": "domínio ou URL visível, ou null",
   "plataforma": "Google Ads | Bing Ads | Microsoft Ads | outro",
+  "tipo_acao": "negativacao | exclusao_marca",
+  "tipo_correspondencia": "exata | frase | ampla | null",
+  "nivel_aplicacao": "conta | campanha | grupo_anuncios | null",
   "termos_identificados": ["termos", "negativados", "visíveis"],
   "tipo_evidencia": "confirmacao_negativacao | lista_termos | bloqueio_ativo | campanha | outro",
   "data_evidencia": "YYYY-MM-DD ou null",
   "confirmacao_negativacao": true,
   "confianca": 0.85,
   "ocr_raw": "todo o texto extraído da imagem",
-  "nome_logico": "Negativação Serasa x AcordoCerto - Google Ads - Abr 2026",
+  "nome_logico": "Negativação Serasa x AcordoCerto - Google Ads - Exata - Conta - Abr 2026",
   "observacoes": "observações relevantes"
 }}
 
 Regras:
+- tipo_acao: "negativacao" = palavras-chave negativas; "exclusao_marca" = exclusão de marca (Brand Exclusions no Google Ads / Bing)
+- tipo_correspondencia: "exata" = [colchetes], "frase" = "aspas", "ampla" = sem marcação; null se exclusão de marca
+- nivel_aplicacao: "conta" = lista compartilhada/nível de conta; "campanha" = aplicado em campanha específica; null se não identificado
 - termos_identificados nunca null, use [] se vazio
-- confirmacao_negativacao = true somente se o print mostra negativação salva/ativa
+- confirmacao_negativacao = true somente se o print mostra negativação/exclusão salva ou ativa
 - Responda APENAS com o JSON, sem texto adicional"""
 
 
@@ -101,6 +107,9 @@ async def analyze_image(
         result.setdefault("confirmacao_negativacao", False)
         result.setdefault("confianca", 0.5)
         result.setdefault("ocr_raw", "")
+        result.setdefault("tipo_acao", "negativacao")
+        result.setdefault("tipo_correspondencia", None)
+        result.setdefault("nivel_aplicacao", None)
         result.setdefault("nome_logico", _fallback_nome_logico(card_context, filename))
 
         return result
@@ -126,6 +135,9 @@ def _empty_analysis(card_context: dict, filename: str, error: str = "") -> dict:
         "plataforma": card_context.get("plataforma"),
         "termos_identificados": [],
         "tipo_evidencia": "outro",
+        "tipo_acao": "negativacao",
+        "tipo_correspondencia": None,
+        "nivel_aplicacao": None,
         "data_evidencia": None,
         "confirmacao_negativacao": False,
         "confianca": 0.0,

@@ -75,6 +75,9 @@ class Evidencia(Base):
     concorrente_identificado = Column(Text)
     dominio = Column(Text)
     plataforma = Column(Text)
+    tipo_acao = Column(Text)           # negativacao | exclusao_marca
+    tipo_correspondencia = Column(Text) # exata | frase | ampla
+    nivel_aplicacao = Column(Text)     # conta | campanha | grupo_anuncios
     termos_identificados = Column(ARRAY(Text), default=list)
     tipo_evidencia = Column(Text)
     data_evidencia = Column(Date)

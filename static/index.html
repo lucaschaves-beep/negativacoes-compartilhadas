@@ -59,6 +59,12 @@
   </div>
 
   <script>
+    function _badgeTipoAcao(tipo) {
+      if (tipo === 'exclusao_marca')
+        return '<span class="bg-purple-100 text-purple-700 px-1.5 py-0.5 rounded text-xs font-medium">Exclusão de marca</span>'
+      return '<span class="bg-blue-100 text-blue-700 px-1.5 py-0.5 rounded text-xs font-medium">Negativação</span>'
+    }
+
     async function buscar() {
       const q = document.getElementById('query').value.trim()
       if (!q) return
@@ -139,7 +145,9 @@
               <div class="mt-1 text-xs text-gray-500 flex flex-wrap gap-3">
                 <span>Marca: <strong>${ev.marca_identificada || '—'}</strong></span>
                 <span>Plataforma: <strong>${ev.plataforma || '—'}</strong></span>
-                <span>Tipo: ${ev.tipo_evidencia || '—'}</span>
+                <span>${_badgeTipoAcao(ev.tipo_acao)}</span>
+                <span>${ev.tipo_correspondencia ? `Corresp: <strong>${ev.tipo_correspondencia}</strong>` : ''}</span>
+                <span>${ev.nivel_aplicacao ? `Nível: <strong>${ev.nivel_aplicacao}</strong>` : ''}</span>
                 <span>Data: ${ev.data_evidencia || '—'}</span>
               </div>
               <div class="mt-1 text-xs">
