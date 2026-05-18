@@ -1,6 +1,6 @@
-def generate_embedding(text: str) -> list[float]:
+def generate_embedding(text: str) -> None:
     """No-op — vector search replaced by full-text search to avoid heavy ML deps."""
-    return []
+    return None
 
 
 def build_evidencia_text(analysis: dict, card_context: dict) -> str:
