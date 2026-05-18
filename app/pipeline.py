@@ -96,6 +96,11 @@ async def processar_anexo(card_id: str, attachment: dict, card_context: dict):
         except (ValueError, TypeError):
             pass
 
+    # tipo_correspondencia pode vir como lista quando a imagem tem múltiplos tipos
+    tipo_corresp = analysis.get("tipo_correspondencia")
+    if isinstance(tipo_corresp, list):
+        tipo_corresp = "/".join(sorted(set(v for v in tipo_corresp if v))) or None
+
     async with AsyncSessionLocal() as db:
         evidencia = Evidencia(
             card_id=card_id,
@@ -109,7 +114,7 @@ async def processar_anexo(card_id: str, attachment: dict, card_context: dict):
             dominio=analysis.get("dominio"),
             plataforma=analysis.get("plataforma") or card_context.get("plataforma"),
             tipo_acao=analysis.get("tipo_acao", "negativacao"),
-            tipo_correspondencia=analysis.get("tipo_correspondencia"),
+            tipo_correspondencia=tipo_corresp,
             nivel_aplicacao=analysis.get("nivel_aplicacao"),
             termos_identificados=analysis.get("termos_identificados", []),
             tipo_evidencia=analysis.get("tipo_evidencia"),
