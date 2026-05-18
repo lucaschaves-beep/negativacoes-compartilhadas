@@ -265,7 +265,7 @@
       document.getElementById('btnPause').classList.remove('hidden')
       document.getElementById('btnStop').classList.remove('hidden')
 
-      const fases = checks.map(c => ({ id: c.value, nome: c.dataset.nome }))
+      const fases = checks.map(c => ({ id: c.value, nome: c.dataset.nome, filtrar: c.dataset.filtrar === 'true' }))
       const allIds = []
 
       // ── Fase 1: Scan ─────────────────────────────────────────────
@@ -302,7 +302,8 @@
             break
           }
         }
-        logSync(`✔ ${fase.nome}: ${matched} cards cliente×cliente de ${scanned} escaneados`, 'ok')
+        const labelCards = fase.filtrar ? 'cards cliente×cliente' : 'cards'
+        logSync(`✔ ${fase.nome}: ${matched} ${labelCards} de ${scanned} escaneados`, 'ok')
       }
 
       if (syncStopped) {
