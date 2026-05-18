@@ -2,6 +2,7 @@ from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sess
 from sqlalchemy.orm import DeclarativeBase
 from sqlalchemy import Column, String, Text, Boolean, Float, Date, DateTime, ARRAY, JSON, ForeignKey, Index
 from sqlalchemy.dialects.postgresql import UUID, JSONB
+from sqlalchemy.pool import NullPool
 from pgvector.sqlalchemy import Vector
 import uuid
 from datetime import datetime, timezone
@@ -9,9 +10,15 @@ from app.config import get_settings
 
 settings = get_settings()
 
-# Converte URL para formato async
+# NullPool = sem conexões persistentes (obrigatório em serverless/Vercel)
+# SSL obrigatório para Supabase em produção
 db_url = settings.database_url.replace("postgresql://", "postgresql+asyncpg://")
-engine = create_async_engine(db_url, echo=False, pool_pre_ping=True)
+engine = create_async_engine(
+    db_url,
+    echo=False,
+    poolclass=NullPool,
+    connect_args={"ssl": "require"},
+)
 AsyncSessionLocal = async_sessionmaker(engine, expire_on_commit=False)
 
 
