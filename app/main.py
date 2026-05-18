@@ -5,6 +5,7 @@ from fastapi.responses import FileResponse
 from app.api.webhook import router as webhook_router
 from app.api.search import router as search_router
 from app.api.grupos import router as grupos_router
+from app.api.admin import router as admin_router
 import os
 
 app = FastAPI(
@@ -23,6 +24,7 @@ app.add_middleware(
 app.include_router(webhook_router, tags=["webhook"])
 app.include_router(search_router, tags=["busca"])
 app.include_router(grupos_router)
+app.include_router(admin_router)
 
 # Serve o frontend HTML
 static_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), "static")
@@ -37,14 +39,3 @@ async def index():
 async def health():
     return {"status": "ok", "service": "negativacoes-compartilhadas"}
 
-@app.get("/db-test")
-async def db_test():
-    import traceback
-    from sqlalchemy import text
-    from app.database import AsyncSessionLocal
-    try:
-        async with AsyncSessionLocal() as db:
-            result = await db.execute(text("SELECT 1 AS ok"))
-            return {"ok": True, "result": result.scalar()}
-    except Exception as e:
-        return {"ok": False, "error": str(e), "trace": traceback.format_exc()}

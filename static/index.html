@@ -53,6 +53,37 @@
       <div id="resultadoCard" class="mt-2 text-sm text-gray-500"></div>
     </details>
 
+    <!-- Sincronização em lote -->
+    <details class="mb-8 bg-white border border-gray-200 rounded-lg p-4">
+      <summary class="cursor-pointer text-sm font-medium text-gray-700">🔄 Sincronizar Cards do Pipefy</summary>
+      <div class="mt-4 space-y-3">
+        <p class="text-xs text-gray-500">Selecione as fases para importar. Na fase <strong>Sucesso</strong>, apenas cards onde o concorrente também é cliente Branddi (caso cliente × cliente).</p>
+        <div id="fasesCheck" class="space-y-1 text-sm text-gray-700"></div>
+        <div class="flex gap-2 mt-3">
+          <button id="btnSync" onclick="iniciarSync()"
+            class="bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2 rounded-lg text-sm font-medium">
+            Iniciar Sincronização
+          </button>
+          <button id="btnPause" onclick="pausarSync()" class="hidden bg-yellow-500 hover:bg-yellow-600 text-white px-4 py-2 rounded-lg text-sm font-medium">
+            Pausar
+          </button>
+          <button id="btnStop" onclick="pararSync()" class="hidden bg-red-500 hover:bg-red-600 text-white px-4 py-2 rounded-lg text-sm font-medium">
+            Parar
+          </button>
+        </div>
+        <!-- Progresso -->
+        <div id="syncStatus" class="hidden mt-3 space-y-2">
+          <div class="text-xs font-medium text-gray-600" id="syncLabel">Aguardando...</div>
+          <div class="w-full bg-gray-100 rounded-full h-2">
+            <div id="syncBar" class="bg-indigo-500 h-2 rounded-full transition-all" style="width:0%"></div>
+          </div>
+          <div class="text-xs text-gray-400" id="syncDetail"></div>
+        </div>
+        <!-- Log -->
+        <div id="syncLog" class="hidden mt-3 max-h-48 overflow-y-auto bg-gray-50 border border-gray-200 rounded p-2 text-xs text-gray-600 font-mono space-y-0.5"></div>
+      </div>
+    </details>
+
     <!-- Resultados -->
     <div id="loading" class="hidden text-center text-gray-400 text-sm py-8">Buscando...</div>
     <div id="resultados"></div>
@@ -184,6 +215,155 @@
         el.innerHTML = `<p class="text-sm text-red-500">Erro: ${e.message}</p>`
       }
     }
+
+    // ─── Sincronização em lote ───────────────────────────────────────
+    let syncPaused = false
+    let syncStopped = false
+
+    async function carregarFases() {
+      try {
+        const r = await fetch('/admin/sync/fases')
+        const d = await r.json()
+        const el = document.getElementById('fasesCheck')
+        el.innerHTML = d.fases.map(f => `
+          <label class="flex items-center gap-2 cursor-pointer">
+            <input type="checkbox" value="${f.id}" data-nome="${f.nome}" data-filtrar="${f.filtrar_clientes}"
+              class="fase-check accent-indigo-600" checked />
+            <span>${f.nome}</span>
+            ${f.filtrar_clientes ? '<span class="text-xs text-purple-600 bg-purple-50 px-1.5 rounded">somente cliente × cliente</span>' : ''}
+          </label>`).join('')
+      } catch(e) { console.error('Erro ao carregar fases', e) }
+    }
+
+    function logSync(msg, tipo = 'info') {
+      const el = document.getElementById('syncLog')
+      el.classList.remove('hidden')
+      const cores = { info: 'text-gray-600', ok: 'text-green-600', erro: 'text-red-500', fase: 'text-indigo-600 font-semibold' }
+      const div = document.createElement('div')
+      div.className = cores[tipo] || 'text-gray-600'
+      div.textContent = msg
+      el.appendChild(div)
+      el.scrollTop = el.scrollHeight
+    }
+
+    function setProgresso(label, pct, detail) {
+      document.getElementById('syncLabel').textContent = label
+      document.getElementById('syncBar').style.width = pct + '%'
+      document.getElementById('syncDetail').textContent = detail || ''
+    }
+
+    async function iniciarSync() {
+      const checks = [...document.querySelectorAll('.fase-check:checked')]
+      if (!checks.length) { alert('Selecione pelo menos uma fase.'); return }
+
+      syncPaused = false
+      syncStopped = false
+      document.getElementById('syncStatus').classList.remove('hidden')
+      document.getElementById('syncLog').classList.remove('hidden')
+      document.getElementById('syncLog').innerHTML = ''
+      document.getElementById('btnSync').classList.add('hidden')
+      document.getElementById('btnPause').classList.remove('hidden')
+      document.getElementById('btnStop').classList.remove('hidden')
+
+      const fases = checks.map(c => ({ id: c.value, nome: c.dataset.nome }))
+      const allIds = []
+
+      // ── Fase 1: Scan ─────────────────────────────────────────────
+      for (const fase of fases) {
+        if (syncStopped) break
+        logSync(`▶ Escaneando: ${fase.nome}`, 'fase')
+        let cursor = null
+        let scanned = 0, matched = 0, total = 0
+
+        while (true) {
+          if (syncStopped) break
+          while (syncPaused) await new Promise(r => setTimeout(r, 500))
+
+          const url = `/admin/sync/scan?phase_id=${fase.id}${cursor ? '&cursor=' + encodeURIComponent(cursor) : ''}`
+          try {
+            const r = await fetch(url)
+            const d = await r.json()
+            scanned += d.scanned
+            matched += d.matched
+            total = d.total
+            allIds.push(...d.matched_ids)
+
+            const pct = total > 0 ? Math.round(scanned / total * 100) : 0
+            setProgresso(
+              `Escaneando ${fase.nome}…`,
+              pct,
+              `${scanned}/${total} cards escaneados — ${matched} encontrados`
+            )
+
+            if (!d.has_next) break
+            cursor = d.next_cursor
+          } catch(e) {
+            logSync(`Erro ao escanear ${fase.nome}: ${e.message}`, 'erro')
+            break
+          }
+        }
+        logSync(`✔ ${fase.nome}: ${matched} cards cliente×cliente de ${scanned} escaneados`, 'ok')
+      }
+
+      if (syncStopped) {
+        logSync('Sincronização interrompida.', 'erro')
+        resetBotoesSync()
+        return
+      }
+
+      // ── Fase 2: Processamento ────────────────────────────────────
+      logSync(`\n▶ Processando ${allIds.length} cards com IA…`, 'fase')
+      let processados = 0, erros = 0
+
+      for (const id of allIds) {
+        if (syncStopped) break
+        while (syncPaused) await new Promise(r => setTimeout(r, 500))
+
+        setProgresso(
+          'Processando cards…',
+          Math.round(processados / allIds.length * 100),
+          `${processados}/${allIds.length} processados (${erros} erros)`
+        )
+
+        try {
+          const r = await fetch(`/admin/process/${id}`, { method: 'POST' })
+          const d = await r.json()
+          if (d.ok) {
+            processados++
+          } else {
+            erros++
+            logSync(`✗ Card ${id}: ${d.error || 'erro desconhecido'}`, 'erro')
+          }
+        } catch(e) {
+          erros++
+          logSync(`✗ Card ${id}: ${e.message}`, 'erro')
+        }
+      }
+
+      setProgresso('Concluído!', 100, `${processados} processados, ${erros} erros`)
+      logSync(`\n✅ Sincronização concluída: ${processados} cards processados, ${erros} erros.`, 'ok')
+      resetBotoesSync()
+    }
+
+    function pausarSync() {
+      syncPaused = !syncPaused
+      document.getElementById('btnPause').textContent = syncPaused ? 'Retomar' : 'Pausar'
+    }
+
+    function pararSync() {
+      syncStopped = true
+      syncPaused = false
+    }
+
+    function resetBotoesSync() {
+      document.getElementById('btnSync').classList.remove('hidden')
+      document.getElementById('btnPause').classList.add('hidden')
+      document.getElementById('btnStop').classList.add('hidden')
+      document.getElementById('btnPause').textContent = 'Pausar'
+    }
+
+    carregarFases()
+    // ─────────────────────────────────────────────────────────────────
 
     async function processarCard() {
       const raw = document.getElementById('cardId').value.trim()

@@ -54,6 +54,31 @@ query ListCards($pipeId: ID!, $after: String) {
 }
 """
 
+QUERY_PHASE_CARDS = """
+query PhaseCards($phaseId: ID!, $after: String) {
+  phase(id: $phaseId) {
+    cards_count
+    cards(first: 50, after: $after) {
+      edges {
+        node {
+          id
+          title
+          fields {
+            name
+            value
+            array_value
+          }
+        }
+      }
+      pageInfo {
+        hasNextPage
+        endCursor
+      }
+    }
+  }
+}
+"""
+
 
 class PipefyClient:
     def __init__(self):
@@ -99,6 +124,20 @@ class PipefyClient:
             cursor = page["pageInfo"]["endCursor"]
 
         return cards
+
+    async def list_phase_cards_page(self, phase_id: str, cursor: str | None = None) -> dict:
+        """Retorna uma página de 50 cards de uma fase, com campos, para filtragem."""
+        variables: dict = {"phaseId": phase_id}
+        if cursor:
+            variables["after"] = cursor
+        data = await self._query(QUERY_PHASE_CARDS, variables)
+        phase = data["phase"]
+        return {
+            "cards": [edge["node"] for edge in phase["cards"]["edges"]],
+            "has_next": phase["cards"]["pageInfo"]["hasNextPage"],
+            "next_cursor": phase["cards"]["pageInfo"]["endCursor"],
+            "total": phase.get("cards_count", 0),
+        }
 
     async def download_attachment(self, url: str) -> bytes:
         # Pipefy retorna caminhos relativos — converte para URL completa
