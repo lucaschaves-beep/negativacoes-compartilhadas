@@ -12,7 +12,7 @@ settings = get_settings()
 
 # NullPool = sem conexões persistentes (obrigatório em serverless/Vercel)
 # SSL obrigatório para Supabase em produção
-db_url = settings.database_url.replace("postgresql://", "postgresql+asyncpg://")
+db_url = settings.database_url.strip().replace("postgresql://", "postgresql+asyncpg://")
 engine = create_async_engine(
     db_url,
     echo=False,
