@@ -1,0 +1,186 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Negativações Compartilhadas</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="bg-gray-50 min-h-screen font-sans">
+
+  <div class="max-w-4xl mx-auto px-4 py-10">
+    <h1 class="text-2xl font-bold text-gray-800 mb-1">🔍 Negativações Compartilhadas</h1>
+    <p class="text-gray-500 text-sm mb-8">Busca inteligente de evidências de negativação no Pipefy</p>
+
+    <!-- Busca -->
+    <div class="flex gap-2 mb-8">
+      <input id="query" type="text" placeholder="Buscar marca... ex: Serasa, Acordo Certo"
+        class="flex-1 border border-gray-300 rounded-lg px-4 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400"
+        onkeydown="if(event.key==='Enter') buscar()" />
+      <button onclick="buscar()"
+        class="bg-blue-600 hover:bg-blue-700 text-white px-5 py-2 rounded-lg text-sm font-medium">
+        Buscar
+      </button>
+    </div>
+
+    <!-- Verificador de boa fé -->
+    <details class="mb-8 bg-white border border-gray-200 rounded-lg p-4">
+      <summary class="cursor-pointer text-sm font-medium text-gray-700">⚖️ Verificar Boa Fé entre duas marcas</summary>
+      <div class="mt-3 flex gap-2 flex-wrap">
+        <input id="marcaA" type="text" placeholder="Marca A (ex: Serasa)"
+          class="border border-gray-300 rounded-lg px-3 py-2 text-sm flex-1 min-w-[140px]" />
+        <input id="marcaB" type="text" placeholder="Marca B (ex: Acordo Certo)"
+          class="border border-gray-300 rounded-lg px-3 py-2 text-sm flex-1 min-w-[140px]" />
+        <button onclick="verificarBoafe()"
+          class="bg-green-600 hover:bg-green-700 text-white px-4 py-2 rounded-lg text-sm font-medium">
+          Verificar
+        </button>
+      </div>
+      <div id="resultadoBoafe" class="mt-3"></div>
+    </details>
+
+    <!-- Processar card manualmente -->
+    <details class="mb-8 bg-white border border-gray-200 rounded-lg p-4">
+      <summary class="cursor-pointer text-sm font-medium text-gray-700">⚙️ Processar card do Pipefy</summary>
+      <div class="mt-3 flex gap-2">
+        <input id="cardId" type="text" placeholder="ID do card (ex: 741065587)"
+          class="border border-gray-300 rounded-lg px-3 py-2 text-sm flex-1" />
+        <button onclick="processarCard()"
+          class="bg-gray-700 hover:bg-gray-800 text-white px-4 py-2 rounded-lg text-sm font-medium">
+          Analisar
+        </button>
+      </div>
+      <div id="resultadoCard" class="mt-2 text-sm text-gray-500"></div>
+    </details>
+
+    <!-- Resultados -->
+    <div id="loading" class="hidden text-center text-gray-400 text-sm py-8">Buscando...</div>
+    <div id="resultados"></div>
+  </div>
+
+  <script>
+    async function buscar() {
+      const q = document.getElementById('query').value.trim()
+      if (!q) return
+      document.getElementById('loading').classList.remove('hidden')
+      document.getElementById('resultados').innerHTML = ''
+      try {
+        const r = await fetch(`/search?q=${encodeURIComponent(q)}&limite=20`)
+        const data = await r.json()
+        renderResultados(data)
+      } catch (e) {
+        document.getElementById('resultados').innerHTML = `<p class="text-red-500 text-sm">Erro: ${e.message}</p>`
+      } finally {
+        document.getElementById('loading').classList.add('hidden')
+      }
+    }
+
+    function renderResultados(data) {
+      const el = document.getElementById('resultados')
+      let html = ''
+
+      if (data.marcas && data.marcas.length > 0) {
+        data.marcas.forEach(m => {
+          const boafe = m.boa_fe && m.boa_fe.length > 0
+            ? `<div class="mt-2 p-2 bg-green-50 border border-green-200 rounded text-sm text-green-700">✅ Boa fé identificada com: ${m.boa_fe.map(b => `${b.marca_a} ↔ ${b.marca_b}`).join(', ')}</div>`
+            : ''
+
+          const grupo = m.grupo
+            ? `<span class="text-xs text-blue-600 bg-blue-50 px-2 py-0.5 rounded ml-2">Grupo: ${m.grupo.nome}</span>`
+            : ''
+
+          const cards = m.cards_relacionados.slice(0, 5).map(c =>
+            `<a href="${c.pipefy_url}" target="_blank" class="block text-xs text-blue-600 hover:underline mt-1">
+              → ${c.titulo || c.id} <span class="text-gray-400">${c.fase || ''}</span>
+            </a>`
+          ).join('')
+
+          html += `
+            <div class="bg-white border border-gray-200 rounded-lg p-4 mb-4">
+              <div class="flex items-center justify-between flex-wrap gap-2">
+                <div>
+                  <span class="font-semibold text-gray-800">${m.nome}</span>
+                  ${m.nome_mysql ? `<span class="text-xs text-gray-400 ml-2">(MySQL: ${m.nome_mysql})</span>` : ''}
+                  ${grupo}
+                </div>
+                <div class="flex gap-4 text-sm text-gray-500">
+                  <span>📤 Realizou: <strong>${m.negativacoes_realizadas}</strong></span>
+                  <span>📥 Recebeu: <strong>${m.negativacoes_recebidas}</strong></span>
+                </div>
+              </div>
+              ${boafe}
+              ${cards ? `<div class="mt-3 border-t pt-2"><p class="text-xs text-gray-400 mb-1">Cards relacionados:</p>${cards}</div>` : ''}
+            </div>`
+        })
+      }
+
+      if (data.evidencias_semanticas && data.evidencias_semanticas.length > 0) {
+        html += `<h2 class="text-sm font-semibold text-gray-600 mt-4 mb-2">Evidências encontradas (${data.total_evidencias})</h2>`
+        data.evidencias_semanticas.forEach(ev => {
+          const confirmada = ev.confirmacao_negativacao
+          const cor = confirmada ? 'border-green-300 bg-green-50' : 'border-yellow-200 bg-yellow-50'
+          const icone = confirmada ? '🟢' : '🟡'
+          const sim = ev.similaridade ? `${Math.round(ev.similaridade * 100)}%` : '—'
+          html += `
+            <div class="border ${cor} rounded-lg p-3 mb-2 text-sm">
+              <div class="flex justify-between items-start flex-wrap gap-1">
+                <span class="font-medium text-gray-700">${icone} ${ev.nome_logico || ev.nome_original || 'Sem nome'}</span>
+                <span class="text-xs text-gray-400">sim: ${sim}</span>
+              </div>
+              <div class="mt-1 text-xs text-gray-500 flex flex-wrap gap-3">
+                <span>Marca: <strong>${ev.marca_identificada || '—'}</strong></span>
+                <span>Plataforma: <strong>${ev.plataforma || '—'}</strong></span>
+                <span>Tipo: ${ev.tipo_evidencia || '—'}</span>
+                <span>Data: ${ev.data_evidencia || '—'}</span>
+              </div>
+              <div class="mt-1 text-xs">
+                <a href="https://app.pipefy.com/open-cards/${ev.card_id}" target="_blank" class="text-blue-500 hover:underline">Ver card no Pipefy →</a>
+                ${ev.url_original ? `<a href="${ev.url_original}" target="_blank" class="text-blue-500 hover:underline ml-3">Ver evidência →</a>` : ''}
+              </div>
+            </div>`
+        })
+      }
+
+      if (!html) html = `<p class="text-gray-400 text-sm">Nenhum resultado encontrado para "${data.query}".</p>`
+      el.innerHTML = html
+    }
+
+    async function verificarBoafe() {
+      const a = document.getElementById('marcaA').value.trim()
+      const b = document.getElementById('marcaB').value.trim()
+      if (!a || !b) return
+      const el = document.getElementById('resultadoBoafe')
+      el.innerHTML = '<span class="text-sm text-gray-400">Verificando...</span>'
+      try {
+        const r = await fetch(`/boa-fe?marca_a=${encodeURIComponent(a)}&marca_b=${encodeURIComponent(b)}`)
+        if (r.status === 404) { el.innerHTML = '<p class="text-sm text-red-500">Uma ou ambas as marcas não encontradas no banco.</p>'; return }
+        const d = await r.json()
+        const status = d.boa_fe_completa
+          ? '<div class="p-2 bg-green-100 border border-green-300 rounded text-green-700 font-medium text-sm">✅ Boa fé completa — ambas já negativaram uma à outra.</div>'
+          : '<div class="p-2 bg-yellow-100 border border-yellow-300 rounded text-yellow-700 font-medium text-sm">⚠️ Boa fé incompleta.</div>'
+        el.innerHTML = `${status}
+          <div class="mt-2 text-xs text-gray-600">
+            <p>${d.a_negativou_b ? '✅' : '❌'} <strong>${a}</strong> negativou <strong>${b}</strong></p>
+            <p class="mt-1">${d.b_negativou_a ? '✅' : '❌'} <strong>${b}</strong> negativou <strong>${a}</strong></p>
+          </div>`
+      } catch (e) {
+        el.innerHTML = `<p class="text-sm text-red-500">Erro: ${e.message}</p>`
+      }
+    }
+
+    async function processarCard() {
+      const id = document.getElementById('cardId').value.trim()
+      if (!id) return
+      const el = document.getElementById('resultadoCard')
+      el.textContent = 'Enviando para análise...'
+      try {
+        const r = await fetch(`/webhook/process/${id}`, { method: 'POST' })
+        const d = await r.json()
+        el.textContent = d.ok ? `✅ Card ${id} enfileirado para análise.` : `Erro: ${JSON.stringify(d)}`
+      } catch (e) {
+        el.textContent = `Erro: ${e.message}`
+      }
+    }
+  </script>
+</body>
+</html>

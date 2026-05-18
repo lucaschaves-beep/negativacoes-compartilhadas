@@ -1,0 +1,30 @@
+# API
+fastapi==0.115.5
+uvicorn[standard]==0.32.1
+pydantic==2.10.3
+pydantic-settings==2.6.1
+python-multipart==0.0.20
+
+# Banco de dados
+sqlalchemy==2.0.36
+asyncpg==0.30.0
+pgvector==0.3.6
+
+# HTTP
+httpx==0.28.1
+
+# Groq (gratuito - 14.400 req/dia)
+groq==0.13.1
+
+# Embeddings (gratuito, local)
+sentence-transformers==3.3.1
+torch==2.5.1
+
+# Imagens
+Pillow==11.0.0
+
+# Storage (opcional - Cloudflare R2)
+boto3==1.35.90
+
+# Utilitários
+python-dotenv==1.0.1
