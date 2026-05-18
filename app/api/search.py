@@ -1,8 +1,6 @@
 from fastapi import APIRouter, Depends, Query, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, or_, text
-from sqlalchemy.orm import selectinload
-from typing import Optional
 
 from app.database import get_db, Marca, Evidencia, Negativacao, Card, GrupoEmpresarial
 
@@ -15,44 +13,64 @@ async def search(
     limite: int = Query(20, le=50),
     db: AsyncSession = Depends(get_db),
 ):
-    """
-    Busca inteligente por marca: retorna cards, evidências, negativações e boa fé.
-    Combina busca textual + semântica (vetorial).
-    """
-    # 1. Busca textual por marca
+    q_like = f"%{q}%"
+
+    # 1. Busca por marca
     result = await db.execute(
         select(Marca).where(
             or_(
-                Marca.nome.ilike(f"%{q}%"),
-                Marca.nome_mysql.ilike(f"%{q}%"),
+                Marca.nome.ilike(q_like),
+                Marca.nome_mysql.ilike(q_like),
             )
         )
     )
     marcas = result.scalars().all()
 
-    # 2. Busca textual nas evidências (full-text search)
-    evidencias_result = await db.execute(
-        text("""
-            SELECT e.id, e.card_id, e.nome_logico, e.nome_original, e.url_cache, e.url_original,
-                   e.marca_identificada, e.concorrente_identificado, e.plataforma,
-                   e.confirmacao_negativacao, e.data_evidencia, e.tipo_evidencia, e.confianca,
-                   NULL::float AS similaridade
-            FROM evidencias e
-            WHERE
-                e.nome_logico ILIKE :q
-                OR e.nome_original ILIKE :q
-                OR e.marca_identificada ILIKE :q
-                OR e.concorrente_identificado ILIKE :q
-                OR e.ocr_raw ILIKE :q
-                OR EXISTS (
-                    SELECT 1 FROM UNNEST(e.termos_identificados) AS t WHERE t ILIKE :q
-                )
-            ORDER BY e.data_evidencia DESC NULLS LAST
-            LIMIT :limite
-        """),
-        {"q": f"%{q}%", "limite": limite},
+    # 2. Busca nas evidências — ORM (evita repetição de :q no asyncpg)
+    ev_result = await db.execute(
+        select(
+            Evidencia.id,
+            Evidencia.card_id,
+            Evidencia.nome_logico,
+            Evidencia.nome_original,
+            Evidencia.url_cache,
+            Evidencia.url_original,
+            Evidencia.marca_identificada,
+            Evidencia.concorrente_identificado,
+            Evidencia.plataforma,
+            Evidencia.confirmacao_negativacao,
+            Evidencia.data_evidencia,
+            Evidencia.tipo_evidencia,
+            Evidencia.confianca,
+        ).where(
+            or_(
+                Evidencia.nome_logico.ilike(q_like),
+                Evidencia.nome_original.ilike(q_like),
+                Evidencia.marca_identificada.ilike(q_like),
+                Evidencia.concorrente_identificado.ilike(q_like),
+                Evidencia.ocr_raw.ilike(q_like),
+            )
+        ).order_by(Evidencia.data_evidencia.desc().nullslast()).limit(limite)
     )
-    evidencias = [dict(row._mapping) for row in evidencias_result]
+    evidencias = [
+        {
+            "id": str(row.id),
+            "card_id": row.card_id,
+            "nome_logico": row.nome_logico,
+            "nome_original": row.nome_original,
+            "url_cache": row.url_cache,
+            "url_original": row.url_original,
+            "marca_identificada": row.marca_identificada,
+            "concorrente_identificado": row.concorrente_identificado,
+            "plataforma": row.plataforma,
+            "confirmacao_negativacao": row.confirmacao_negativacao,
+            "data_evidencia": str(row.data_evidencia) if row.data_evidencia else None,
+            "tipo_evidencia": row.tipo_evidencia,
+            "confianca": row.confianca,
+            "similaridade": None,
+        }
+        for row in ev_result
+    ]
 
     # 3. Para cada marca encontrada, busca negativações e boa fé
     resposta_marcas = []
@@ -65,19 +83,19 @@ async def search(
         )
         cards = cards_result.scalars().all()
 
-        # Negativações que essa marca realizou
+        # Negativações realizadas e recebidas
         neg_realizadas = await db.execute(
             select(Negativacao).where(Negativacao.quem_negativou_id == marca.id)
         )
         neg_realizadas = neg_realizadas.scalars().all()
 
-        # Negativações que essa marca recebeu
         neg_recebidas = await db.execute(
             select(Negativacao).where(Negativacao.quem_foi_negativado_id == marca.id)
         )
         neg_recebidas = neg_recebidas.scalars().all()
 
-        # Boa fé: marcas que têm negativação mútua com essa marca
+        # Boa fé (usa parâmetros distintos para asyncpg)
+        mid = str(marca.id)
         boa_fe_result = await db.execute(
             text("""
                 SELECT ma.nome AS marca_a, mb.nome AS marca_b,
@@ -85,9 +103,9 @@ async def search(
                 FROM boa_fe_mutua bfm
                 JOIN marcas ma ON ma.id = bfm.marca_a_id
                 JOIN marcas mb ON mb.id = bfm.marca_b_id
-                WHERE bfm.marca_a_id = :mid OR bfm.marca_b_id = :mid
+                WHERE bfm.marca_a_id = :mid1 OR bfm.marca_b_id = :mid2
             """),
-            {"mid": str(marca.id)},
+            {"mid1": mid, "mid2": mid},
         )
         boa_fe = [dict(row._mapping) for row in boa_fe_result]
 
@@ -96,7 +114,6 @@ async def search(
         if marca.grupo_id:
             g = await db.get(GrupoEmpresarial, marca.grupo_id)
             if g:
-                # Outras marcas do mesmo grupo
                 outras_result = await db.execute(
                     select(Marca).where(
                         Marca.grupo_id == marca.grupo_id,
@@ -145,7 +162,6 @@ async def check_boa_fe(
     marca_b: str = Query(...),
     db: AsyncSession = Depends(get_db),
 ):
-    """Verifica se há boa fé mútua entre duas marcas específicas."""
     result_a = await db.execute(select(Marca).where(Marca.nome.ilike(f"%{marca_a}%")))
     m_a = result_a.scalar_one_or_none()
 
@@ -216,7 +232,6 @@ async def list_marcas(db: AsyncSession = Depends(get_db)):
 
 @router.post("/marcas/{marca_id}/grupo/{grupo_id}")
 async def assign_grupo(marca_id: str, grupo_id: str, db: AsyncSession = Depends(get_db)):
-    """Associa uma marca a um grupo empresarial."""
     marca = await db.get(Marca, marca_id)
     grupo = await db.get(GrupoEmpresarial, grupo_id)
     if not marca or not grupo:
