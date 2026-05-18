@@ -36,3 +36,15 @@ async def index():
 @app.get("/health")
 async def health():
     return {"status": "ok", "service": "negativacoes-compartilhadas"}
+
+@app.get("/db-test")
+async def db_test():
+    import traceback
+    from sqlalchemy import text
+    from app.database import AsyncSessionLocal
+    try:
+        async with AsyncSessionLocal() as db:
+            result = await db.execute(text("SELECT 1 AS ok"))
+            return {"ok": True, "result": result.scalar()}
+    except Exception as e:
+        return {"ok": False, "error": str(e), "trace": traceback.format_exc()}
