@@ -96,7 +96,9 @@ class PipefyClient:
             )
             response.raise_for_status()
             data = response.json()
-            if "errors" in data:
+            # Pipefy pode retornar {data: {...}, errors: [...]} quando um card do lote é
+            # inacessível — processar data mesmo assim; só falhar se data ausente.
+            if "errors" in data and not data.get("data"):
                 raise ValueError(f"Pipefy GraphQL error: {data['errors']}")
             return data["data"]
 
