@@ -1,14 +1,7 @@
-from app.config import get_settings
-
-settings = get_settings()
-
 IMAGE_EXTENSIONS = {'.jpg', '.jpeg', '.png', '.gif', '.webp', '.bmp', '.tiff', '.tif'}
 
-
-def _is_image(filename: str) -> bool:
-    parts = filename.lower().rsplit('.', 1)
-    return len(parts) > 1 and f'.{parts[1]}' in IMAGE_EXTENSIONS
-
+# Seções de anexo a IGNORAR (email recebido — não são evidências)
+SECOES_IGNORAR = ["anexos do email", "email attachment", "email anexo"]
 
 FIELD_MAP = {
     "nome do concorrente": "concorrente",
@@ -24,8 +17,10 @@ FIELD_MAP = {
     "empresa grupo": "grupo",
 }
 
-# Seções de anexo a IGNORAR
-SECOES_IGNORAR = ["anexos do email", "email attachment", "email anexo"]
+
+def _is_image(filename: str) -> bool:
+    parts = filename.lower().rsplit('.', 1)
+    return len(parts) > 1 and f'.{parts[1]}' in IMAGE_EXTENSIONS
 
 
 def parse_card_fields(card: dict) -> dict:
@@ -61,91 +56,41 @@ def parse_card_fields(card: dict) -> dict:
     return result
 
 
-def _build_uuid_url_map(card: dict) -> dict[str, str]:
-    """
-    Cria mapa de UUID → URL assinada a partir de card.attachments.
-    card.attachments contém URLs completas e assinadas do Pipefy Storage.
-    """
-    uuid_map = {}
-    for att in card.get("attachments", []):
-        url = att.get("url", "")
-        if not url:
-            continue
-        # Extrai UUID do path: .../signed/uploads/{uuid}/filename.ext?...
-        parts = url.split("/uploads/")
-        if len(parts) > 1:
-            uuid = parts[1].split("/")[0]
-            uuid_map[uuid] = url
-    return uuid_map
-
-
 def filter_valid_attachments(card: dict) -> list[dict]:
     """
-    Retorna anexos válidos com URLs assinadas completas.
-    Usa campos de attachment para identificar a seção,
-    e card.attachments para obter as URLs corretas.
+    Retorna todas as imagens do card excluindo as de seções de e-mail.
+    Usa card.attachments (URLs assinadas) como fonte primária — garante capturar
+    imagens de qualquer seção válida (Google Ads, Bing, etc.) sem depender de
+    nomes de seção fixos.
     """
-    uuid_url_map = _build_uuid_url_map(card)
-    valid_attachments = []
-    seen_urls = set()
-
-    # 1. Anexos de campos com seção válida (ex: "N1AP. G. Ads - Print da negativação")
+    # Coleta UUIDs das seções ignoradas (e-mail) para excluir
+    ignored_uuids: set[str] = set()
     for field in card.get("fields", []):
-        label = (field.get("name") or field.get("field", {}).get("label") or "").strip()
-        label_lower = label.lower()
-
-        # Ignora seção de e-mail
-        if any(ignorar in label_lower for ignorar in SECOES_IGNORAR):
-            continue
-
-        # Aceita campos de seção válida
-        is_valid_section = any(
-            secao.lower() in label_lower or label_lower in secao.lower()
-            for secao in settings.secoes_validas
-        )
-        if not is_valid_section:
-            continue
-
-        for path in (field.get("array_value") or []):
-            if not path:
-                continue
-            # Extrai UUID do path relativo: uploads/{uuid}/filename
-            # Path pode ser "uploads/uuid/file" ou "/uploads/uuid/file"
-            clean = path.lstrip("/")
-            if clean.startswith("uploads/"):
-                uuid = clean.split("/")[1]
-            else:
-                parts = clean.split("/uploads/")
-                uuid = parts[1].split("/")[0] if len(parts) > 1 else None
-            filename = path.split("/")[-1].split("?")[0]
-
-            signed_url = uuid_url_map.get(uuid) if uuid else None
-            if not signed_url:
-                # Tenta construir URL diretamente
-                signed_url = f"https://app.pipefy.com/storage/v1/signed/{path.lstrip('/')}"
-
-            if signed_url and signed_url not in seen_urls and _is_image(filename):
-                seen_urls.add(signed_url)
-                valid_attachments.append({
-                    "url": signed_url,
-                    "filename": filename,
-                    "secao": label,
-                })
-
-    # 2. Fallback: usa card.attachments diretos (seção "Anexos")
-    #    Inclui apenas os que ainda não foram adicionados
-    if not valid_attachments:
-        for att in card.get("attachments", []):
-            url = att.get("url", "")
-            if url and url not in seen_urls:
-                filename = url.split("/")[-1].split("?")[0]
-                if not _is_image(filename):
+        label = (field.get("name") or field.get("field", {}).get("label") or "").lower().strip()
+        if any(ign in label for ign in SECOES_IGNORAR):
+            for path in (field.get("array_value") or []):
+                if not path:
                     continue
-                seen_urls.add(url)
-                valid_attachments.append({
-                    "url": url,
-                    "filename": filename,
-                    "secao": "Anexos",
-                })
+                clean = path.lstrip("/")
+                if "uploads/" in clean:
+                    uuid_part = clean.split("uploads/", 1)[1].split("/")[0]
+                    if uuid_part:
+                        ignored_uuids.add(uuid_part)
 
-    return valid_attachments
+    # Retorna todas as imagens que não são de seções ignoradas
+    valid: list[dict] = []
+    seen: set[str] = set()
+    for att in card.get("attachments", []):
+        url = att.get("url", "")
+        if not url or url in seen:
+            continue
+        if "/uploads/" in url:
+            uuid_part = url.split("/uploads/", 1)[1].split("/")[0]
+            if uuid_part in ignored_uuids:
+                continue
+        filename = url.split("/")[-1].split("?")[0]
+        if not _is_image(filename):
+            continue
+        seen.add(url)
+        valid.append({"url": url, "filename": filename, "secao": "Anexos"})
+    return valid

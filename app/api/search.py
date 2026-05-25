@@ -26,7 +26,7 @@ async def search(
     )
     marcas = result.scalars().all()
 
-    # 2. Busca nas evidências — ORM (evita repetição de :q no asyncpg)
+    # 2. Busca nas evidências — exclui análises que falharam (confianca=0.0)
     ev_result = await db.execute(
         select(
             Evidencia.id,
@@ -38,11 +38,15 @@ async def search(
             Evidencia.marca_identificada,
             Evidencia.concorrente_identificado,
             Evidencia.plataforma,
+            Evidencia.tipo_acao,
+            Evidencia.tipo_correspondencia,
+            Evidencia.nivel_aplicacao,
             Evidencia.confirmacao_negativacao,
             Evidencia.data_evidencia,
             Evidencia.tipo_evidencia,
             Evidencia.confianca,
         ).where(
+            Evidencia.confianca > 0,
             or_(
                 Evidencia.nome_logico.ilike(q_like),
                 Evidencia.nome_original.ilike(q_like),
@@ -63,6 +67,9 @@ async def search(
             "marca_identificada": row.marca_identificada,
             "concorrente_identificado": row.concorrente_identificado,
             "plataforma": row.plataforma,
+            "tipo_acao": row.tipo_acao,
+            "tipo_correspondencia": row.tipo_correspondencia,
+            "nivel_aplicacao": row.nivel_aplicacao,
             "confirmacao_negativacao": row.confirmacao_negativacao,
             "data_evidencia": str(row.data_evidencia) if row.data_evidencia else None,
             "tipo_evidencia": row.tipo_evidencia,
@@ -72,18 +79,20 @@ async def search(
         for row in ev_result
     ]
 
-    # 3. Para cada marca encontrada, busca negativações e boa fé
+    # 3. Para cada marca encontrada, busca cards e negativações
     resposta_marcas = []
     for marca in marcas:
-        # Cards relacionados
+        # Cards relacionados — busca pelos nomes raw (cliente_id/concorrente_id nunca populados)
         cards_result = await db.execute(
             select(Card).where(
-                or_(Card.cliente_id == marca.id, Card.concorrente_id == marca.id)
+                or_(
+                    Card.nome_cliente_mysql_raw.ilike(f"%{marca.nome}%"),
+                    Card.nome_concorrente_raw.ilike(f"%{marca.nome}%"),
+                )
             ).order_by(Card.created_at.desc()).limit(10)
         )
         cards = cards_result.scalars().all()
 
-        # Negativações realizadas e recebidas
         neg_realizadas = await db.execute(
             select(Negativacao).where(Negativacao.quem_negativou_id == marca.id)
         )
@@ -94,7 +103,6 @@ async def search(
         )
         neg_recebidas = neg_recebidas.scalars().all()
 
-        # Boa fé (usa parâmetros distintos para asyncpg)
         mid = str(marca.id)
         boa_fe_result = await db.execute(
             text("""
@@ -109,7 +117,6 @@ async def search(
         )
         boa_fe = [dict(row._mapping) for row in boa_fe_result]
 
-        # Grupo empresarial
         grupo = None
         if marca.grupo_id:
             g = await db.get(GrupoEmpresarial, marca.grupo_id)
@@ -162,11 +169,12 @@ async def check_boa_fe(
     marca_b: str = Query(...),
     db: AsyncSession = Depends(get_db),
 ):
+    # Usa .scalars().first() para não quebrar quando há múltiplas marcas com nome similar
     result_a = await db.execute(select(Marca).where(Marca.nome.ilike(f"%{marca_a}%")))
-    m_a = result_a.scalar_one_or_none()
+    m_a = result_a.scalars().first()
 
     result_b = await db.execute(select(Marca).where(Marca.nome.ilike(f"%{marca_b}%")))
-    m_b = result_b.scalar_one_or_none()
+    m_b = result_b.scalars().first()
 
     if not m_a or not m_b:
         raise HTTPException(status_code=404, detail="Uma ou ambas as marcas não encontradas")

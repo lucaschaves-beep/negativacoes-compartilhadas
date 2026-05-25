@@ -19,5 +19,9 @@ groq==0.13.1
 # Imagens
 Pillow==11.0.0
 
+# Armazenamento R2 (Cloudflare)
+boto3==1.35.76
+botocore==1.35.76
+
 # Utilitários
 python-dotenv==1.0.1

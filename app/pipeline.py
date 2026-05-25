@@ -2,7 +2,6 @@
 Pipeline de processamento de cards — sem Celery, roda diretamente via async.
 Usado pelo webhook (BackgroundTasks) e pelos scripts manuais.
 """
-import hashlib
 from datetime import datetime, timezone, date
 
 from sqlalchemy import select
