@@ -64,6 +64,10 @@
             class="bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2 rounded-lg text-sm font-medium">
             Iniciar Sincronização
           </button>
+          <button id="btnRetomar" onclick="retomar()"
+            class="hidden bg-teal-600 hover:bg-teal-700 text-white px-4 py-2 rounded-lg text-sm font-medium">
+            ▶ Retomar
+          </button>
           <button id="btnReprocess" onclick="reprocessarFalhas()"
             class="bg-orange-500 hover:bg-orange-600 text-white px-4 py-2 rounded-lg text-sm font-medium">
             Reprocessar Falhas
@@ -221,8 +225,39 @@
     }
 
     // ─── Sincronização em lote ───────────────────────────────────────
+    const CKPT_KEY = 'negativacoes_sync_ckpt'
+    const DELAY_CARDS_MS = 1200
     let syncPaused = false
     let syncStopped = false
+
+    function saveCheckpoint(type, allIds, nextIndex, stats) {
+      localStorage.setItem(CKPT_KEY, JSON.stringify({ type, allIds, nextIndex, stats, savedAt: Date.now() }))
+    }
+
+    function loadCheckpoint() {
+      try {
+        const raw = localStorage.getItem(CKPT_KEY)
+        if (!raw) return null
+        const ckpt = JSON.parse(raw)
+        if ((Date.now() - ckpt.savedAt) > 7 * 24 * 3600 * 1000) { clearCheckpoint(); return null }
+        return ckpt
+      } catch { return null }
+    }
+
+    function clearCheckpoint() { localStorage.removeItem(CKPT_KEY) }
+
+    function mostrarBotaoRetomar() {
+      const ckpt = loadCheckpoint()
+      const btn = document.getElementById('btnRetomar')
+      if (ckpt && ckpt.nextIndex < ckpt.allIds.length) {
+        const restantes = ckpt.allIds.length - ckpt.nextIndex
+        btn.textContent = `▶ Retomar (${restantes} restantes)`
+        btn.classList.remove('hidden')
+      } else {
+        btn.classList.add('hidden')
+        if (ckpt) clearCheckpoint()
+      }
+    }
 
     async function carregarFases() {
       try {
@@ -256,18 +291,83 @@
       document.getElementById('syncDetail').textContent = detail || ''
     }
 
-    async function iniciarSync() {
-      const checks = [...document.querySelectorAll('.fase-check:checked')]
-      if (!checks.length) { alert('Selecione pelo menos uma fase.'); return }
-
-      syncPaused = false
-      syncStopped = false
+    function _mostrarBotoesProcessando() {
       document.getElementById('syncStatus').classList.remove('hidden')
       document.getElementById('syncLog').classList.remove('hidden')
       document.getElementById('syncLog').innerHTML = ''
       document.getElementById('btnSync').classList.add('hidden')
+      document.getElementById('btnRetomar').classList.add('hidden')
+      document.getElementById('btnReprocess').classList.add('hidden')
       document.getElementById('btnPause').classList.remove('hidden')
       document.getElementById('btnStop').classList.remove('hidden')
+    }
+
+    async function processarLote(type, allIds, startIndex, label, prevStats) {
+      let erros = prevStats?.erros ?? 0
+      let anexosOk = prevStats?.anexosOk ?? 0
+
+      for (let i = startIndex; i < allIds.length; i++) {
+        const id = allIds[i]
+        if (syncStopped) break
+        while (syncPaused) await new Promise(r => setTimeout(r, 500))
+
+        setProgresso(
+          label,
+          Math.round(i / allIds.length * 100),
+          `${i + 1}/${allIds.length} cards | ${anexosOk} evidências salvas (${erros} erros)`
+        )
+
+        let cardData
+        try {
+          const r = await fetch(`/admin/process/${id}`, { method: 'POST' })
+          cardData = await r.json()
+          if (!cardData.ok) {
+            erros++
+            logSync(`✗ Card ${id}: ${cardData.error || 'erro ao salvar card'}`, 'erro')
+            saveCheckpoint(type, allIds, i + 1, { erros, anexosOk })
+            continue
+          }
+        } catch(e) {
+          erros++
+          logSync(`✗ Card ${id}: ${e.message}`, 'erro')
+          saveCheckpoint(type, allIds, i + 1, { erros, anexosOk })
+          continue
+        }
+
+        for (const att of (cardData.attachments || [])) {
+          if (syncStopped) break
+          while (syncPaused) await new Promise(r => setTimeout(r, 500))
+          try {
+            const r2 = await fetch('/admin/process-attachment', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ card_id: id, attachment: att, card_context: cardData.card_context })
+            })
+            const d2 = await r2.json()
+            if (d2.ok) anexosOk++
+            else logSync(`  ✗ Anexo ${att.filename}: ${d2.error || 'erro'}`, 'erro')
+          } catch(e) {
+            logSync(`  ✗ Anexo ${att.filename}: ${e.message}`, 'erro')
+          }
+        }
+
+        saveCheckpoint(type, allIds, i + 1, { erros, anexosOk })
+        if (i < allIds.length - 1 && !syncStopped) {
+          await new Promise(r => setTimeout(r, DELAY_CARDS_MS))
+        }
+      }
+
+      return { processados: allIds.length - startIndex, erros, anexosOk }
+    }
+
+    async function iniciarSync() {
+      const checks = [...document.querySelectorAll('.fase-check:checked')]
+      if (!checks.length) { alert('Selecione pelo menos uma fase.'); return }
+
+      clearCheckpoint()
+      syncPaused = false
+      syncStopped = false
+      _mostrarBotoesProcessando()
 
       const fases = checks.map(c => ({ id: c.value, nome: c.dataset.nome, filtrar: c.dataset.filtrar === 'true' }))
       const allIds = []
@@ -276,8 +376,7 @@
       for (const fase of fases) {
         if (syncStopped) break
         logSync(`▶ Escaneando: ${fase.nome}`, 'fase')
-        let cursor = null
-        let scanned = 0, matched = 0, total = 0
+        let cursor = null, scanned = 0, matched = 0, total = 0
 
         while (true) {
           if (syncStopped) break
@@ -293,11 +392,7 @@
             allIds.push(...d.matched_ids)
 
             const pct = total > 0 ? Math.round(scanned / total * 100) : 0
-            setProgresso(
-              `Escaneando ${fase.nome}…`,
-              pct,
-              `${scanned}/${total} cards escaneados — ${matched} encontrados`
-            )
+            setProgresso(`Escaneando ${fase.nome}…`, pct, `${scanned}/${total} cards escaneados — ${matched} encontrados`)
 
             if (!d.has_next) break
             cursor = d.next_cursor
@@ -316,69 +411,53 @@
         return
       }
 
-      // ── Fase 2: Processamento (2 passos por card para evitar timeout) ──
       logSync(`\n▶ Processando ${allIds.length} cards com IA…`, 'fase')
-      let processados = 0, erros = 0, anexosOk = 0
+      saveCheckpoint('sync', allIds, 0, { erros: 0, anexosOk: 0 })
 
-      for (const id of allIds) {
-        if (syncStopped) break
-        while (syncPaused) await new Promise(r => setTimeout(r, 500))
+      const stats = await processarLote('sync', allIds, 0, 'Processando cards…', null)
 
-        setProgresso(
-          'Processando cards…',
-          Math.round(processados / allIds.length * 100),
-          `${processados}/${allIds.length} cards | ${anexosOk} evidências salvas (${erros} erros)`
-        )
+      setProgresso('Concluído!', 100, `${stats.processados} cards | ${stats.anexosOk} evidências salvas (${stats.erros} erros)`)
+      if (syncStopped) {
+        logSync(`Sincronização pausada. Clique "▶ Retomar" para continuar amanhã.`, 'info')
+      } else {
+        logSync(`\n✅ Concluído: ${stats.processados} cards, ${stats.anexosOk} evidências salvas, ${stats.erros} erros.`, 'ok')
+        clearCheckpoint()
+      }
+      resetBotoesSync()
+    }
 
-        // Passo 1: salvar metadados do card (~2s, sem IA)
-        let cardData
-        try {
-          const r = await fetch(`/admin/process/${id}`, { method: 'POST' })
-          cardData = await r.json()
-          if (!cardData.ok) {
-            erros++
-            logSync(`✗ Card ${id}: ${cardData.error || 'erro ao salvar card'}`, 'erro')
-            continue
-          }
-        } catch(e) {
-          erros++
-          logSync(`✗ Card ${id}: ${e.message}`, 'erro')
-          continue
-        }
-
-        // Passo 2: processar cada anexo individualmente (~10-20s cada, com IA)
-        for (const att of (cardData.attachments || [])) {
-          if (syncStopped) break
-          while (syncPaused) await new Promise(r => setTimeout(r, 500))
-          try {
-            const r2 = await fetch('/admin/process-attachment', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({
-                card_id: id,
-                attachment: att,
-                card_context: cardData.card_context
-              })
-            })
-            const d2 = await r2.json()
-            if (d2.ok) anexosOk++
-            else logSync(`  ✗ Anexo ${att.filename}: ${d2.error || 'erro'}`, 'erro')
-          } catch(e) {
-            logSync(`  ✗ Anexo ${att.filename}: ${e.message}`, 'erro')
-          }
-        }
-
-        processados++
+    async function retomar() {
+      const ckpt = loadCheckpoint()
+      if (!ckpt || ckpt.nextIndex >= ckpt.allIds.length) {
+        clearCheckpoint()
+        mostrarBotaoRetomar()
+        return
       }
 
-      setProgresso('Concluído!', 100, `${processados} cards | ${anexosOk} evidências salvas (${erros} erros)`)
-      logSync(`\n✅ Concluído: ${processados} cards, ${anexosOk} evidências salvas, ${erros} erros.`, 'ok')
+      syncPaused = false
+      syncStopped = false
+      _mostrarBotoesProcessando()
+
+      const { type, allIds, nextIndex, stats: prevStats } = ckpt
+      const restantes = allIds.length - nextIndex
+      const label = type === 'reprocess' ? 'Reprocessando falhas…' : 'Processando cards…'
+      logSync(`▶ Retomando: ${restantes} cards restantes (${nextIndex}/${allIds.length} já processados)…`, 'fase')
+
+      const stats = await processarLote(type, allIds, nextIndex, label, prevStats)
+
+      setProgresso('Concluído!', 100, `${stats.processados} cards | ${stats.anexosOk} evidências salvas (${stats.erros} erros)`)
+      if (syncStopped) {
+        logSync(`Pausado. Clique "▶ Retomar" para continuar.`, 'info')
+      } else {
+        logSync(`\n✅ Concluído: ${stats.processados} cards, ${stats.anexosOk} evidências salvas, ${stats.erros} erros.`, 'ok')
+        clearCheckpoint()
+      }
       resetBotoesSync()
     }
 
     function pausarSync() {
       syncPaused = !syncPaused
-      document.getElementById('btnPause').textContent = syncPaused ? 'Retomar' : 'Pausar'
+      document.getElementById('btnPause').textContent = syncPaused ? '▶ Continuar' : 'Pausar'
     }
 
     function pararSync() {
@@ -392,10 +471,10 @@
       document.getElementById('btnPause').classList.add('hidden')
       document.getElementById('btnStop').classList.add('hidden')
       document.getElementById('btnPause').textContent = 'Pausar'
+      mostrarBotaoRetomar()
     }
 
     async function reprocessarFalhas() {
-      // Primeiro verifica quantas falhas existem
       let countData
       try {
         const r = await fetch('/admin/sync/failed-count')
@@ -416,7 +495,6 @@
       )
       if (!ok) return
 
-      // Deleta as falhas e obtém os card_ids
       let resetData
       try {
         const r = await fetch('/admin/sync/reset-failed', { method: 'POST' })
@@ -432,70 +510,27 @@
         return
       }
 
-      // Inicia o reprocessamento usando o mesmo loop de sync
       syncPaused = false
       syncStopped = false
-      document.getElementById('syncStatus').classList.remove('hidden')
-      document.getElementById('syncLog').classList.remove('hidden')
-      document.getElementById('syncLog').innerHTML = ''
-      document.getElementById('btnSync').classList.add('hidden')
-      document.getElementById('btnReprocess').classList.add('hidden')
-      document.getElementById('btnPause').classList.remove('hidden')
-      document.getElementById('btnStop').classList.remove('hidden')
+      _mostrarBotoesProcessando()
 
       logSync(`▶ Reprocessando ${allIds.length} cards com falhas anteriores…`, 'fase')
-      let processados = 0, erros = 0, anexosOk = 0
+      saveCheckpoint('reprocess', allIds, 0, { erros: 0, anexosOk: 0 })
 
-      for (const id of allIds) {
-        if (syncStopped) break
-        while (syncPaused) await new Promise(r => setTimeout(r, 500))
+      const stats = await processarLote('reprocess', allIds, 0, 'Reprocessando falhas…', null)
 
-        setProgresso(
-          'Reprocessando falhas…',
-          Math.round(processados / allIds.length * 100),
-          `${processados}/${allIds.length} cards | ${anexosOk} evidências salvas (${erros} erros)`
-        )
-
-        let cardData
-        try {
-          const r = await fetch(`/admin/process/${id}`, { method: 'POST' })
-          cardData = await r.json()
-          if (!cardData.ok) {
-            erros++
-            logSync(`✗ Card ${id}: ${cardData.error || 'erro ao salvar card'}`, 'erro')
-            continue
-          }
-        } catch(e) {
-          erros++
-          logSync(`✗ Card ${id}: ${e.message}`, 'erro')
-          continue
-        }
-
-        for (const att of (cardData.attachments || [])) {
-          if (syncStopped) break
-          while (syncPaused) await new Promise(r => setTimeout(r, 500))
-          try {
-            const r2 = await fetch('/admin/process-attachment', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ card_id: id, attachment: att, card_context: cardData.card_context })
-            })
-            const d2 = await r2.json()
-            if (d2.ok) anexosOk++
-            else logSync(`  ✗ Anexo ${att.filename}: ${d2.error || 'erro'}`, 'erro')
-          } catch(e) {
-            logSync(`  ✗ Anexo ${att.filename}: ${e.message}`, 'erro')
-          }
-        }
-        processados++
+      setProgresso('Concluído!', 100, `${stats.processados} cards | ${stats.anexosOk} evidências salvas (${stats.erros} erros)`)
+      if (syncStopped) {
+        logSync(`Pausado. Clique "▶ Retomar" para continuar.`, 'info')
+      } else {
+        logSync(`\n✅ Reprocessamento concluído: ${stats.processados} cards, ${stats.anexosOk} evidências salvas, ${stats.erros} erros.`, 'ok')
+        clearCheckpoint()
       }
-
-      setProgresso('Concluído!', 100, `${processados} cards | ${anexosOk} evidências salvas (${erros} erros)`)
-      logSync(`\n✅ Reprocessamento concluído: ${processados} cards, ${anexosOk} evidências salvas, ${erros} erros.`, 'ok')
       resetBotoesSync()
     }
 
     carregarFases()
+    mostrarBotaoRetomar()
     // ─────────────────────────────────────────────────────────────────
 
     async function processarCard() {
