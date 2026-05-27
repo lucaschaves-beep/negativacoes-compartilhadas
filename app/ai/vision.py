@@ -15,16 +15,14 @@ GROQ_API_URL = "https://api.groq.com/openai/v1/chat/completions"
 PROMPT_ANALISE = """Você é um especialista em análise de evidências de negativação e exclusão de marcas em plataformas de anúncios digitais (Google Ads, Bing Ads).
 
 Contexto do card:
-- Cliente solicitante: {cliente}
-- Concorrente (que deveria ser negativado): {concorrente}
-- Plataforma informada no card: {plataforma}
+{contexto_linhas}
 
 Analise a imagem e retorne APENAS um JSON com esta estrutura:
 {{
   "marca_identificada": "nome da marca/empresa que fez a ação",
   "concorrente_identificado": "nome do concorrente alvo da ação",
   "dominio": "domínio ou URL visível, ou null",
-  "plataforma": "Google Ads | Bing Ads | Microsoft Ads | outro",
+  "plataforma": "Google Ads | Google Shopping | Bing Ads | Bing Shopping | Microsoft Ads | outro",
   "tipo_acao": "negativacao | exclusao_marca",
   "tipo_correspondencia": "exata | frase | ampla | null",
   "nivel_aplicacao": "conta | campanha | grupo_anuncios | null",
@@ -43,21 +41,49 @@ Regras:
 - tipo_correspondencia: "exata" = [colchetes], "frase" = "aspas", "ampla" = sem marcação; null se exclusão de marca
 - nivel_aplicacao: "conta" = lista compartilhada/nível de conta; "campanha" = aplicado em campanha específica; null se não identificado
 - termos_identificados nunca null, use [] se vazio
+- Se o contexto informa a plataforma do campo de origem, use-a como forte indicativo
+- Se o contexto informa termos negativados, procure-os na imagem
 - confirmacao_negativacao = true somente se o print mostra negativação/exclusão salva ou ativa
 - Responda APENAS com o JSON, sem texto adicional"""
+
+
+def _build_contexto(card_context: dict, plataforma_hint: str | None) -> str:
+    lines = []
+    if card_context.get("cliente_mysql"):
+        lines.append(f"- Cliente solicitante: {card_context['cliente_mysql']}")
+    if card_context.get("concorrente"):
+        lines.append(f"- Concorrente (alvo da negativação): {card_context['concorrente']}")
+    if plataforma_hint:
+        lines.append(f"- Plataforma (identificada pelo campo do card): {plataforma_hint}")
+    elif card_context.get("plataforma"):
+        lines.append(f"- Plataforma informada no card: {card_context['plataforma']}")
+    if card_context.get("tipo_concorrente"):
+        lines.append(f"- Tipo de concorrente: {card_context['tipo_concorrente']}")
+    termos = card_context.get("termos") or []
+    if termos:
+        lines.append(f"- Termos negativados (do card): {', '.join(termos[:15])}")
+    datas = [
+        ("Google", card_context.get("data_confirmacao_google")),
+        ("Bing", card_context.get("data_confirmacao_bing")),
+        ("ASA", card_context.get("data_confirmacao_asa")),
+    ]
+    for plat, data in datas:
+        if data:
+            lines.append(f"- Data confirmação {plat} (campo estruturado): {data}")
+    return "\n".join(lines) if lines else "- Sem contexto adicional"
 
 
 async def analyze_image(
     image_bytes: bytes,
     card_context: dict,
     filename: str = "",
+    plataforma_hint: str | None = None,
 ) -> dict:
     try:
         image = Image.open(io.BytesIO(image_bytes))
         if image.mode not in ("RGB", "L"):
             image = image.convert("RGB")
 
-        # Redimensiona se muito grande (limite Groq: 4MB por imagem)
         max_size = 1280
         if max(image.size) > max_size:
             image.thumbnail((max_size, max_size), Image.LANCZOS)
@@ -67,9 +93,7 @@ async def analyze_image(
         image_b64 = base64.b64encode(buffer.getvalue()).decode()
 
         prompt = PROMPT_ANALISE.format(
-            cliente=card_context.get("cliente_mysql") or "não informado",
-            concorrente=card_context.get("concorrente") or "não informado",
-            plataforma=card_context.get("plataforma") or "não informado",
+            contexto_linhas=_build_contexto(card_context, plataforma_hint),
         )
 
         payload = {

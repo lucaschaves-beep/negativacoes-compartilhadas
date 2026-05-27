@@ -71,6 +71,11 @@ async def salvar_card(card_id: str) -> tuple[list, dict]:
         "cliente_mysql": parsed.get("cliente_mysql"),
         "plataforma": parsed.get("plataforma"),
         "titulo": parsed.get("titulo"),
+        "termos": parsed.get("termos", []),
+        "tipo_concorrente": parsed.get("tipo_concorrente"),
+        "data_confirmacao_google": parsed.get("data_confirmacao_google"),
+        "data_confirmacao_bing": parsed.get("data_confirmacao_bing"),
+        "data_confirmacao_asa": parsed.get("data_confirmacao_asa"),
     }
     return attachments, card_context
 
@@ -95,7 +100,7 @@ async def processar_anexo(card_id: str, attachment: dict, card_context: dict):
         if existing:
             return  # já processado, não gasta crédito
 
-    analysis = await analyze_image(image_bytes, card_context, attachment["filename"])
+    analysis = await analyze_image(image_bytes, card_context, attachment["filename"], attachment.get("plataforma_hint"))
     url_cache = upload_to_r2(image_bytes, attachment["filename"], card_id)
 
     text_for_embedding = build_evidencia_text(analysis, card_context)
